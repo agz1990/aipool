@@ -1,0 +1,13 @@
+# AIPool 服务器清单
+# 使用 /aipool:init 初始化后编辑此文件
+
+servers: {}
+
+# 示例配置：
+# servers:
+#   dev-server-1:
+#     host: 192.168.1.10
+#     user: admin
+#     pools:
+#       - provider: claude-code
+#         count: 4

@@ -1,0 +1,118 @@
+provider: claude-code
+version: "1.0"
+auth_type: interactive
+
+pre_checks:
+  - id: check_os
+    type: builtin
+    action: check_os
+    allowed: [linux]
+
+  - id: check_disk
+    type: builtin
+    action: check_disk
+    path: /
+    min_gb: 20
+
+  - id: check_sudo
+    type: script
+    script: |
+      sudo -n true 2>/dev/null && echo "ok" || (echo "需要 sudo 权限" && exit 1)
+
+deploy_steps:
+  - id: create_shared_dirs
+    type: builtin
+    action: mkdir
+    paths:
+      - /shared/repos
+      - /shared/claude-status
+      - /shared/claude-logs
+    mode: "755"
+
+  - id: fix_shared_dir_perms
+    type: script
+    script: |
+      sudo chmod 777 /shared/claude-status
+      sudo chmod 777 /shared/claude-logs
+    verify: |
+      test -d /shared/claude-status && test -d /shared/claude-logs
+
+  - id: sync_scripts
+    type: builtin
+    action: rsync
+    source: aipool/claude-code-pool/
+    dest: /opt/aipool/claude-code-pool/
+    exclude:
+      - ".git"
+      - "*.md"
+      - "docs/"
+
+  - id: run_setup
+    type: script
+    script: |
+      cd /opt/aipool/claude-code-pool
+      sudo bash scripts/setup.sh -n {{ pools }}
+    verify: |
+      id claude-pool-1 &>/dev/null
+
+  - id: auth_login
+    type: manual
+    for_each: pool
+    instruction: |
+      请为 Pool {{ index }} 完成 Claude Code 认证：
+
+        1. 在服务器上执行：
+           sudo su - claude-pool-{{ index }}
+
+        2. 运行认证命令：
+           claude auth login
+
+        3. 按提示完成浏览器认证
+
+        4. 验证认证成功：
+           claude "你好" 2>&1 | head -3
+
+        5. 退出池子账号：
+           exit
+
+      完成后输入 'done' 继续下一个池子。
+    verify_script: |
+      sudo su - claude-pool-{{ index }} -c 'claude "test" 2>&1' | grep -qv "not logged in\|authentication\|login"
+
+drift_detection:
+  method: file_hash
+  files:
+    - /opt/aipool/claude-code-pool/scripts/setup.sh
+    - /usr/local/bin/claude-status
+    - /usr/local/bin/claude-auto
+    - /usr/local/bin/claude-claim
+    - /usr/local/bin/claude-release
+
+health_checks:
+  - id: check_pool_users
+    type: builtin
+    action: check_user_exists
+    users:
+      - claude-pool-1
+
+  - id: check_tools_installed
+    type: script
+    script: |
+      for cmd in claude-status claude-auto claude-claim claude-release; do
+        which $cmd || (echo "缺少工具: $cmd" && exit 1)
+      done
+
+  - id: check_shared_dirs
+    type: script
+    script: |
+      for d in /shared/repos /shared/claude-status /shared/claude-logs; do
+        test -d "$d" || (echo "目录不存在: $d" && exit 1)
+      done
+
+rollback:
+  backup_path: /opt/aipool-backup
+  steps:
+    - type: builtin
+      action: restore_backup
+      from: /opt/aipool-backup
+      to: /opt/aipool
